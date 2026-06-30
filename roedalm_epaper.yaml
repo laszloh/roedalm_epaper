@@ -1,0 +1,879 @@
+esphome:
+  name: roedalm-epaper-display
+  friendly_name: Rödalm ePaper display
+  platformio_options:
+    upload_speed: 921600
+  on_boot: 
+    priority: -100
+    then:
+      - lambda: |-
+          // register every sensor whose state we want before a render
+          id(sensor_ready_checks) = {
+            []{ return id(weather_temperature).has_state(); },
+            []{ return id(weather_humidity).has_state(); },
+            []{ return id(weather_pressure).has_state(); },
+            []{ return id(weather_wind_bearing).has_state(); },
+            []{ return id(weather_wind_speed).has_state(); },
+            []{ return id(room_temperature).has_state(); },
+            []{ return id(room_humidity).has_state(); },
+            []{ return id(weather_symbol).has_state(); },
+            []{ return id(forecast_days).has_state(); },
+            []{ return id(event_data).has_state(); },
+            []{ return id(grid_import_today).has_state(); },
+            []{ return id(grid_export_today).has_state(); },
+            []{ return id(solar_today).has_state(); },
+            []{ return id(home_power).has_state(); },
+            []{ return id(home_batt_soc).has_state(); },
+            // local sensors
+            []{ return id(batt_v).has_state(); },
+            []{ return id(batt_pct).has_state(); },
+            []{ return id(wifi_signal_pct).has_state(); },
+            []{ return id(next_wakeup).has_state(); },
+          };
+          // boot finished: from now on switch/charger triggers may sleep us
+          id(boot_done) = true;
+      - script.execute: epd_update
+
+      
+globals:
+  - id: sensor_ready_checks
+    type: std::vector<std::function<bool()>>
+    restore_value: no
+  # false until on_boot completes; stops the force_awake restore at boot from
+  # triggering an immediate (pre-render, pre-time-sync) deep sleep
+  - id: boot_done
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+
+
+external_components:
+  - source: github://laszloh/esphome@epaper-dke86bf
+    components: [epaper_spi]
+    refresh: 1s
+
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      minimum_chip_revision: 3.1
+      sram1_as_iram: True
+    sdkconfig_options:
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "60"
+
+
+logger:
+
+
+api:
+  id: ha_api
+  encryption:
+    key: "WIseOsO2sE8klgX1i/iGytizq/5gd+ND4BpHuimzmhs="
+
+
+ota:
+  - platform: esphome
+
+
+wifi:
+  networks:
+    ssid: !secret wifi_ssid
+    password: !secret wifi_password
+    hidden: true
+  fast_connect: true
+  reboot_timeout: 300s
+
+  ap:
+    ssid: ePaper Display Fallback Hotspot
+    password: "L1QMifo8rXnT"
+
+
+captive_portal:
+
+
+sensor:
+  # esphome sensors
+  - platform: wifi_signal
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+  - platform: copy #
+    source_id: wifi_signal_db
+    id: wifi_signal_pct
+    name: "WiFi Signal Percent"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "%"
+    entity_category: "diagnostic"
+    device_class: ""
+  - platform: adc
+    pin: GPIO35
+    samples: 8
+    attenuation: 12db
+    id: batt_v
+    name: "Battery voltage"
+    filters:
+#      - multiply: 1.967  # 1:2 voltage divider, adjusted to real R-value
+      - multiply: 2.0
+  - platform: copy
+    source_id: batt_v
+    id: batt_pct
+    name: "Battery percent"
+    filters: 
+      - calibrate_linear: 
+          - 4.20 -> 100
+          - 4.15 -> 99
+          - 4.11 -> 80
+          - 4.07 -> 70
+          - 4.02 -> 60
+          - 3.98 -> 50
+          - 3.92 -> 40
+          - 3.87 -> 30
+          - 3.81 -> 20
+          - 3.76 -> 10
+    unit_of_measurement: "%"
+    entity_category: diagnostic
+    device_class: ""
+  # home assistant sensors
+  #   current weather
+  - platform: homeassistant
+    entity_id: weather.pirateweather
+    attribute: temperature
+    internal: true
+    id: weather_temperature
+  - platform: homeassistant
+    entity_id: weather.pirateweather
+    attribute: humidity
+    internal: true
+    id: weather_humidity
+  - platform: homeassistant
+    entity_id: weather.pirateweather
+    attribute: pressure
+    internal: true
+    id: weather_pressure
+  - platform: homeassistant
+    entity_id: weather.pirateweather
+    attribute: wind_bearing
+    internal: true
+    id: weather_wind_bearing
+  - platform: homeassistant
+    entity_id: weather.pirateweather
+    attribute: wind_speed
+    internal: true
+    id: weather_wind_speed
+  #   home room data
+  - platform: homeassistant
+    entity_id: sensor.living_room_og_livingroom_sensor_temperature
+    internal: true
+    id: room_temperature
+  - platform: homeassistant
+    entity_id: sensor.living_room_og_livingroom_sensor_humidity
+    internal: true
+    id: room_humidity
+  #   energy: grid import / export today (kWh, resets at midnight)
+  - platform: homeassistant
+    entity_id: sensor.grid_energy_imported_today
+    internal: true
+    id: grid_import_today
+  - platform: homeassistant
+    entity_id: sensor.grid_energy_returned_today
+    internal: true
+    id: grid_export_today
+  #   energy: solar generated today (kWh, resets at midnight)
+  - platform: homeassistant
+    entity_id: sensor.solar_energy_generated_today
+    internal: true
+    id: solar_today
+  #   energy: current home usage (W) and home battery charge (%)
+  - platform: homeassistant
+    entity_id: sensor.home_power
+    internal: true
+    id: home_power
+  - platform: homeassistant
+    entity_id: sensor.home_battery_level
+    internal: true
+    id: home_batt_soc
+
+
+datetime:
+  - platform: template
+    type: time
+    id: next_wakeup
+    internal: true
+    entity_category: diagnostic
+    set_action: 
+      - lambda: return;
+    lambda: |-
+      auto t = id(ha_time).now();
+      if(!t.is_valid())
+        return {};
+      int iv = (int) id(refresh_interval).state * 60;
+      int secs = t.hour * 3600 + t.minute * 60 +  t.second;
+      int delta = iv - (secs % iv);
+      return ESPTime::from_epoch_local(t.timestamp + delta);
+
+
+text_sensor:
+  - platform: template
+    name: "Next Wakeup"
+    id: next_wakeup_str
+    entity_category: diagnostic
+    lambda: |-
+      char buf[6];
+      snprintf(buf, sizeof(buf), "%02d:%02d", id(next_wakeup).hour, id(next_wakeup).minute);
+      return std::string(buf);
+  # Home Assistant sensors
+  #   current weather
+  - platform: homeassistant
+    entity_id: weather.pirateweather
+    internal: true
+    id: weather_symbol
+  #   packed forecast data
+  #     format: <weekday>|<condition>|<max_temp>|<min_temp>;<next forecast>
+  - platform: homeassistant
+    id: forecast_days
+    internal: true
+    entity_id: sensor.display_data_packed
+    attribute: forecast
+  #   home room name
+  - platform: template
+    internal: true
+    id: room_name
+    lambda: return "Living Room";
+  #   packed calendar data
+  #     format: <start>|<end>|<summary>;<next entry>
+  - platform: homeassistant
+    id: event_data
+    internal: true
+    entity_id: sensor.display_data_packed
+    attribute: events
+
+
+binary_sensor:
+  - platform: gpio
+    pin: 
+      number: GPIO32
+      inverted: true
+      allow_other_uses: true
+      mode: 
+        input: true
+        pullup: true
+    id: tp4056_chrg
+    name: "TP4056 Charging"
+    filters:
+      - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
+    on_state:
+      # ignore the initial state published during boot (on_boot drives the
+      # first render); only re-render on real charger changes afterwards
+      - if:
+          condition:
+            lambda: 'return id(boot_done);'
+          then:
+            - script.execute: epd_update
+  - platform: gpio
+    pin:
+      number: GPIO33
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: tp4056_stdby
+    name: "TP4056 Standby"
+    filters:
+      - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
+    on_state:
+      # ignore the initial state published during boot (on_boot drives the
+      # first render); only re-render on real charger changes afterwards
+      - if:
+          condition:
+            lambda: 'return id(boot_done);'
+          then:
+            - script.execute: epd_update
+
+
+number:
+  - platform: template
+    name: "Dashboard refresh interval"
+    id: refresh_interval
+    optimistic: true
+    restore_value: true
+    initial_value: 10
+    min_value: 5
+    max_value: 120
+    step: 5
+    unit_of_measurement: min
+    mode: box
+
+
+switch:
+  - platform: gpio
+    id: power_switch
+    internal: true
+    pin: GPIO04
+    restore_mode: ALWAYS_ON
+  - platform: template
+    name: "Force awake"
+    id: force_awake
+    icon: mdi:sleep-off
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    # turned off -> re-evaluate sleep immediately (still honors the charger),
+    # but ignore the OFF state restored during boot
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return id(boot_done);'
+          then:
+            - script.execute: enter_sleep
+
+
+deep_sleep:
+  id: pwr_sleep
+  wakeup_pin: 
+    number: GPIO32
+    allow_other_uses: true
+    mode: INPUT_PULLUP
+  wakeup_pin_mode: INVERT_WAKEUP
+
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+
+font:
+  - file: { type: gfonts, family: Nunito, weight: 700 }
+    id: font_header          # section titles (bold)
+    size: 32
+    bpp: 4
+    glyphsets: ["GF_Latin_Core"]
+  - file: { type: gfonts, family: Nunito, weight: 700 }
+    id: font_big             # big current temperature (bold)
+    size: 53
+    bpp: 4
+    glyphsets: ["GF_Latin_Core"]
+  - file: { type: gfonts, family: Nunito, weight: 400 }
+    id: font_xl              # weather + home values (97%, 1024 hPa, 19.0 ...)
+    size: 32
+    bpp: 4
+    glyphsets: ["GF_Latin_Core"]
+  - file: { type: gfonts, family: Nunito, weight: 400 }
+    id: font_lg              # forecast temps + energy values (smallest = 24)
+    size: 24
+    bpp: 4
+    glyphsets: ["GF_Latin_Core"]
+  - file: { type: gfonts, family: Nunito, weight: 700 }
+    id: font_md_b            # day names + calendar event titles (bold)
+    size: 24
+    bpp: 4
+    glyphsets: ["GF_Latin_Core"]
+  - file: { type: gfonts, family: Nunito, weight: 400 }
+    id: font_md              # sublabels, datetimes, footer
+    size: 20
+    bpp: 2
+    glyphsets: ["GF_Latin_Core"]
+  - file: { type: gfonts, family: Nunito, weight: 400 }
+    id: font_sm              # (kept for compatibility; now also 24)
+    size: 24
+    bpp: 4
+    glyphsets: ["GF_Latin_Core"]
+
+  # ---- Material Design Icons -------------------------------------------
+  # THREE SIZE TIERS — pick the tier by which font id you call in the lambda:
+  #   font_icon_lg (52)  -> weather CONDITION icons (current + forecast)
+  #   font_icon_md (32)  -> "main" icons next to a value (humidity, pressure,
+  #                          wind, thermometer, calendar, location pin)
+  #   font_icon_sm (22)  -> battery, wifi, and all energy-flow icons
+  - file: &mdi_src
+      type: web
+      # Material Design Icons, pinned. Bump the @version to update; check the
+      # latest at https://www.npmjs.com/package/@mdi/font
+      url: "https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: font_icon_lg
+    size: 52
+    glyphs: &mdi_glyphs
+      # -- weather conditions (match Home Assistant `weather` states) -----
+      - "\U000F0599"   # weather-sunny             (sunny / clear-day)
+      - "\U000F0594"   # weather-night             (clear-night)
+      - "\U000F0595"   # weather-partly-cloudy     (partlycloudy)
+      - "\U000F0F31"   # weather-night-partly-cloudy
+      - "\U000F0590"   # weather-cloudy            (cloudy)
+      - "\U000F0591"   # weather-fog               (fog)
+      - "\U000F0592"   # weather-hail              (hail)
+      - "\U000F0593"   # weather-lightning         (lightning)
+      - "\U000F067E"   # weather-lightning-rainy   (lightning-rainy)
+      - "\U000F0596"   # weather-pouring           (pouring)
+      - "\U000F0597"   # weather-rainy             (rainy)
+      - "\U000F0598"   # weather-snowy             (snowy)
+      - "\U000F067F"   # weather-snowy-rainy       (snowy-rainy)
+      - "\U000F0F36"   # weather-snowy-heavy
+      - "\U000F059D"   # weather-windy             (windy / wind value icon)
+      - "\U000F059E"   # weather-windy-variant     (windy-variant)
+      - "\U000F0026"   # alert                     (exceptional / fallback)
+      # -- main icons (size 32 in lambda) ---------------------------------
+      - "\U000F058E"   # water-percent             (humidity)
+      - "\U000F029A"   # gauge                     (pressure)
+      - "\U000F0034"   # map-marker                (location pin)
+      - "\U000F050F"   # thermometer               (room temp)
+      - "\U000F00ED"   # calendar                  (calendar events)
+      # -- small icons (size 22 in lambda) --------------------------------
+      - "\U000F125E"   # battery unknown           (top-right)
+      - "\U000F1211"   # battery fully charged     (top-right)
+      - "\U000F12A6"   # battery full charging     (top-right)
+      - "\U000F12A5"   # battery medium charging   (top-right)
+      - "\U000F12A4"   # battery low charging      (top-right)
+      - "\U000F089F"   # battery critical charging (top-right)
+      - "\U000F12A3"   # battery full              (top-right)
+      - "\U000F12A2"   # battery medium            (top-right)
+      - "\U000F12A1"   # battery low               (top-right)
+      - "\U000F10CD"   # battery critical          (top-right)
+      - "\U000F05A9"   # wifi                      (top-right link status)
+      - "\U000F05AA"   # wifi off                  (top-right link status)
+      - "\U000F06B0"   # reload                    (top-right next refresh)
+      - "\U000F0A72"   # solar-power               (energy: solar)
+      - "\U000F0D3E"   # transmission-tower        (energy: grid)
+      - "\U000F02DC"   # home                      (energy: house)
+      - "\U000F1901"   # home-battery              (energy: battery)
+      - "\U000F1903"   # home-lightning-bolt       (energy: home w/ spark) *verify codepoint*
+      - "\U000F0241"   # flash                     (energy: power)
+      - "\U000F004D"   # arrow-left
+      - "\U000F0054"   # arrow-right
+  - file: *mdi_src
+    id: font_icon_md
+    size: 32
+    glyphs: *mdi_glyphs
+  - file: *mdi_src
+    id: font_icon_sm
+    size: 22
+    glyphs: *mdi_glyphs
+  - file: *mdi_src
+    id: font_icon_xl          # big current-weather condition icon
+    size: 90
+    glyphs: *mdi_glyphs
+
+# ---------------------------------------------------------------------------
+# COLORS
+# ---------------------------------------------------------------------------
+# This 7.5" BWR driver maps the buffer via the WHITE channel, so a plain
+# Color(0,0,0,0) renders as nothing. Define explicit colors and reference them
+# in the lambda as id(color_black) / id(color_red).
+color:
+  - id: color_black
+    red: 0%
+    green: 0%
+    blue: 0%
+    white: 0%
+  - id: color_white
+    red: 100%
+    green: 100%
+    blue: 100%
+    white: 100%
+  - id: color_red
+    red: 100%
+    green: 0%
+    blue: 0%
+    white: 0%
+
+# ---------------------------------------------------------------------------
+# SPI + DISPLAY
+# ---------------------------------------------------------------------------
+spi:
+  id: spi_bus0
+  clk_pin: GPIO13
+  mosi_pin: GPIO14
+
+
+display:
+  - platform: epaper_spi
+    id: epd_display
+    cs_pin:
+      number: GPIO15
+      ignore_strapping_warning: true   # GPIO15 is a strapping pin on ESP32
+    dc_pin: GPIO27
+    busy_pin:
+      number: GPIO25
+      inverted: true
+    reset_pin: GPIO26
+    reset_duration: 20ms        # helps newer (Rev 2.x) 7.5 BWR driver HATs latch
+    model: dke-7.5in-86bf-bwr
+    spi_id: spi_bus0
+    rotation: 270            # 480x800 portrait, flipped from 90
+    update_interval: never
+    lambda: |-
+      // Colors come from the global color: section (id(color_black) etc.).
+      // id(color_red) is available if you want red accents.
+      constexpr size_t width = 480;
+      constexpr size_t height = 800;
+      constexpr size_t margin = 20;
+      constexpr size_t icon_margin = 10;
+
+      // --- map a Home Assistant weather state -> MDI glyph --------------
+      // Built once (static) and reused on every render.
+      // Pass id(weather_condition).state (current) or a forecast state string.
+      static const auto wx_icon = [](const std::string &c) -> const char* {
+        static const std::map<std::string, const char*> WX_ICONS = {
+          {"sunny",           "\U000F0599"}, // weather-sunny
+          {"clear-day",       "\U000F0599"}, // weather-sunny
+          {"clear-night",     "\U000F0594"}, // weather-night
+          {"partlycloudy",    "\U000F0595"}, // weather-partly-cloudy
+          {"cloudy",          "\U000F0590"}, // weather-cloudy
+          {"fog",             "\U000F0591"}, // weather-fog
+          {"hail",            "\U000F0592"}, // weather-hail
+          {"lightning",       "\U000F0593"}, // weather-lightning
+          {"lightning-rainy", "\U000F067E"}, // weather-lightning-rainy
+          {"pouring",         "\U000F0596"}, // weather-pouring
+          {"rainy",           "\U000F0597"}, // weather-rainy
+          {"snowy",           "\U000F0598"}, // weather-snowy
+          {"snowy-rainy",     "\U000F067F"}, // weather-snowy-rainy
+          {"windy",           "\U000F059D"}, // weather-windy
+          {"windy-variant",   "\U000F059E"}, // weather-windy-variant
+          {"exceptional",     "\U000F0026"}, // alert
+        };
+
+        auto it_wx = WX_ICONS.find(c);
+        return it_wx != WX_ICONS.end() ? it_wx->second
+                                       : "\U000F0595";  // fallback: partly-cloudy
+      };
+
+      const auto line_2px = [](Display &it, int x1, int y1, int x2, int y2, Color color =  COLOR_ON) {
+        it.line(x1, y1, x2, y2, color);
+        it.line(x1, y1 + 1, x2, y2 + 1, color);
+      };
+
+      const auto draw_chrome = [&]() {
+        // top status row + footer
+        constexpr size_t status_icon_y = 25;
+        constexpr size_t status_text_y = status_icon_y + 2;          // text nudged +2 to sit on icon centre
+        constexpr size_t footer_line_y = 770;
+        constexpr size_t footer_text_y = 795;
+        constexpr size_t icon_text_offset = 30;
+
+        // HEADER
+        // next planned refresh
+        it.print(245, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F06B0");
+        it.print(270, status_text_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, id(next_wakeup_str).state.c_str());
+        
+        const char *wifi_icon = (id(ha_api).is_connected()) ? "\U000F05A9" : "\U000F05AA";
+        it.print(340, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, wifi_icon); // wifi state
+
+        const char *bat_icon = "\U000F125E"; // unknown
+        auto bat = id(batt_pct).state;
+        if (!isnan(bat)) {
+          if (bat > 100.0) bat = 100.0;                 // clamp for display
+
+          const bool charging = id(tp4056_chrg).state;  // CHRG active -> charging
+          const bool full     = id(tp4056_stdby).state; // STDBY active -> charge complete
+          if (charging) {
+            // charging glyphs come in 3 levels; critical falls back to "low charging"
+            if      (bat > 76.0) bat_icon = "\U000F12A6"; // full charging
+            else if (bat > 51.0) bat_icon = "\U000F12A5"; // medium charging
+            else                 bat_icon = "\U000F12A4"; // low / critical charging
+          } else if (full) {
+            bat_icon = "\U000F1211";                       // on charger, complete -> full
+          } else {
+            // on battery / discharging
+            if      (bat > 76.0) bat_icon = "\U000F12A3"; // full
+            else if (bat > 51.0) bat_icon = "\U000F12A2"; // medium
+            else if (bat > 26.0) bat_icon = "\U000F12A1"; // low
+            else                 bat_icon = "\U000F10CD"; // critical
+          }
+        }
+        
+        constexpr size_t bat_icon_pos_x = 390;
+        it.print(bat_icon_pos_x, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, bat_icon); // battery state
+        it.printf(bat_icon_pos_x + icon_text_offset, status_text_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, "%.0f%%", bat);
+
+        // FOOTER
+        line_2px(it, 0, footer_line_y, width, footer_line_y, id(color_black));
+        auto t = id(ha_time).now();
+        if(t.is_valid())
+          it.strftime(width/2, footer_text_y, id(font_md), id(color_black), TextAlign::BOTTOM_CENTER, "Last update: %d.%m.%Y %H:%M", t);
+      };
+
+      // draw header and footer
+      draw_chrome();
+
+      const auto draw_header = [&](int y, const char *text) {
+        constexpr size_t band_h = 36;
+
+        it.filled_rectangle(0, y, width, band_h, id(color_red));
+        it.print(width / 2, y + band_h / 2, id(font_header), id(color_white), TextAlign::CENTER, text);
+      };
+
+      // =================================================================
+      // WEATHER
+      // =================================================================
+      constexpr size_t weather_start = 40;
+      constexpr size_t weather_row_h = 40;
+      constexpr size_t weather_row1 = weather_start + 60;              // hhumidity
+      constexpr size_t weather_row2 = weather_row1 + weather_row_h;    // pressure
+      constexpr size_t weather_row3 = weather_row2 + weather_row_h;    // wind
+      constexpr size_t weather_temp_y = weather_start + 30;            // big temp
+      constexpr size_t weather_icon_y = weather_start + 130;           // condition
+
+      draw_header(weather_start, "WEATHER");
+
+      // big current temperature
+      it.printf(360, weather_temp_y, id(font_big), id(color_black), TextAlign::TOP_CENTER, "%.1f°C", id(weather_temperature).state);
+
+      // current condition
+      it.print(360, weather_icon_y, id(font_icon_xl), id(color_black), TextAlign::CENTER, wx_icon(id(weather_symbol).state));
+
+      // humidity
+      it.print(margin + icon_margin, weather_row1, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F058E");
+      it.printf(60, weather_row1, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f%%", id(weather_humidity).state);
+
+      // pressure
+      it.print(margin + icon_margin, weather_row2, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F029A");
+      it.printf(60, weather_row2, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f hPa", id(weather_pressure).state);
+
+      // wind
+      it.print(margin + icon_margin, weather_row3, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F059D");
+      // map the wind bearing (degrees, 0 = N) to an 8-point compass label
+      static const char* WIND_DIRS[] = { "N", "NO", "O", "SO", "S", "SW", "W", "NW" };
+      const float wind_bearing = id(weather_wind_bearing).state;
+      const char* wind_dir = isnan(wind_bearing) ? "?" : WIND_DIRS[((int) roundf(wind_bearing / 45.0f)) % 8];
+      it.printf(60, weather_row3, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "(%s) %.1f km/h", wind_dir, id(weather_wind_speed).state);
+
+      // =================================================================
+      // FORECAST  (4 columns)
+      // =================================================================
+      constexpr size_t forecast_start = 230;
+      constexpr size_t fc_day_y = forecast_start + 70;
+      constexpr size_t fc_icon_y = forecast_start + 110;
+      constexpr size_t fc_temp_y = forecast_start + 160;
+
+      draw_header(forecast_start, "FORECAST");
+
+      constexpr size_t fc_column_x = (width - 2 * margin) / 4;
+
+      struct Forecast {
+        const char *wd{""};
+        const char *icon{""};
+        float min{NAN};
+        float max{NAN};
+
+        Forecast() = default;
+        Forecast(const char *packed) {
+          static constexpr const char *DOW[] = { "", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+          if (!packed || !*packed) return;
+          std::string tok(packed);
+          size_t p1 = tok.find('|');           if (p1 == std::string::npos) return;
+          size_t p2 = tok.find('|', p1 + 1);   if (p2 == std::string::npos) return;
+          size_t p3 = tok.find('|', p2 + 1);   if (p3 == std::string::npos) return;
+          int d = atoi(tok.substr(0, p1).c_str());
+          this->wd   = (d >= 1 && d <= 7) ? DOW[d] : "";
+          this->icon = wx_icon(tok.substr(p1 + 1, p2 - p1 - 1));
+          this->max  = atof(tok.substr(p2 + 1, p3 - p2 - 1).c_str());
+          this->min  = atof(tok.substr(p3 + 1).c_str());
+        }
+      };
+
+      // pull one ';'-separated day token, then index its '|' fields
+      const auto fc_field = [&](const std::string &days, int day) -> Forecast {
+        size_t s = 0;
+        for (int d = 0; d < day; d++) {
+          s = days.find(';', s);
+          if (s == std::string::npos) return Forecast{};   // fewer days than asked
+          s++;
+        }
+        size_t e = days.find(';', s);
+        std::string tok = days.substr(s, e == std::string::npos ? std::string::npos : e - s);
+        return Forecast(tok.c_str());
+      };
+
+      const std::string days = id(forecast_days).state;
+      for (int i = 0; i < 4; i++) {
+        const size_t x_offset = margin + i * fc_column_x + fc_column_x / 2 ;
+        Forecast fc = fc_field(days, i);
+        it.print(x_offset, fc_day_y, id(font_md_b), id(color_black), TextAlign::BASELINE_CENTER, fc.wd);
+        it.print(x_offset, fc_icon_y, id(font_icon_lg), id(color_black), TextAlign::CENTER, fc.icon);
+        it.printf(x_offset, fc_temp_y, id(font_lg), id(color_black), TextAlign::BASELINE_CENTER, "%.0f° / %.0f°", fc.max, fc.min);
+      }
+
+      // =================================================================
+      // HOME
+      // =================================================================
+      constexpr size_t home_start = 430;
+      constexpr size_t home_subtitle_y = home_start + 50;
+      constexpr size_t home_row_h = 40;
+      constexpr size_t home_row1 = home_subtitle_y + home_row_h;
+      constexpr size_t home_row2 = home_subtitle_y + 2 * home_row_h;
+      constexpr size_t event_h = 60;
+      constexpr size_t event1_y = home_subtitle_y + 20;
+      constexpr size_t event2_y = event1_y + event_h;
+
+      draw_header(home_start, "HOME");
+
+      // -- left: room climate --
+      it.print(margin, home_subtitle_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, id(room_name).state.c_str());
+
+      it.print(margin + icon_margin, home_row1, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F050F");
+      it.printf(60, home_row1, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.1f°", id(room_temperature).state);
+
+      it.print(margin + icon_margin, home_row2, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F058E");
+      it.printf(60, home_row2, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f%%", id(room_humidity).state);
+
+      // -- right: family calendar --
+      it.print(160, home_subtitle_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, "Family calendar");
+
+      struct CalEvent {
+        time_t start{0};
+        time_t end{0};
+        std::string summary{};
+
+        CalEvent() = default;
+        CalEvent(const char *packed) {
+          if (!packed || !*packed) return;
+          std::string tok(packed);
+          size_t p1 = tok.find('|');         if (p1 == std::string::npos) return;
+          size_t p2 = tok.find('|', p1 + 1); if (p2 == std::string::npos) return;
+          this->start = atoi(tok.substr(0, p1).c_str());
+          this->end = atoi(tok.substr(p1 + 1, p2 - p1 - 1).c_str());
+          this->summary = tok.substr(p2 + 1);
+        }
+      };
+
+      // pull one ';'-separated day token, then index its '|' fields
+      const auto event_field = [&](const std::string &events, int n) -> CalEvent {
+        size_t s = 0;
+        for (int d = 0; d < n; d++) {
+          s = events.find(';', s);
+          if (s == std::string::npos) return CalEvent{};   // fewer days than asked
+          s++;
+        }
+        size_t e = events.find(';', s);
+        std::string tok = events.substr(s, e == std::string::npos ? std::string::npos : e - s);
+        return CalEvent(tok.c_str());
+      };
+
+      const auto draw_events = [&](int y, CalEvent event) {
+        it.print(200, y, id(font_md_b), id(color_black), TextAlign::TOP_LEFT, event.summary.c_str());
+        const ESPTime t = ESPTime::from_epoch_local(event.start);
+        it.strftime(200, y + 50, id(font_md), id(color_black), TextAlign::BOTTOM_LEFT, "%d.%m.%Y %H:%M", t);
+        it.print(160, y + 25, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F00ED");
+      };
+
+      const std::string events = id(event_data).state;
+
+      // event 1
+      draw_events(event1_y, event_field(events, 0));
+
+      // event 2
+      draw_events(event2_y, event_field(events, 1));
+
+      // =================================================================
+      // ENERGY  (4 columns: grid / solar / battery / home)
+      // =================================================================
+      constexpr size_t energy_start = 620;
+      constexpr size_t icon_pos = energy_start + 70;
+      constexpr size_t text1_pos = icon_pos + 30;
+      constexpr size_t text2_pos = text1_pos + 30;
+
+      draw_header(630, "ENERGY");
+
+      // column centers (evenly spaced across the width)
+      constexpr size_t e_grid_x = (width - 2 * margin) / 4;
+      constexpr size_t e_grid_offset = margin + e_grid_x / 2;
+
+      constexpr int grid_arrow_x = 23;
+      constexpr int grid_text_x  = 56;
+
+      // -- grid: red right-arrow = import, black left-arrow = export (kWh) --
+      it.print (e_grid_offset, icon_pos, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F0D3E"); // grid symbol
+      it.print (grid_arrow_x, text1_pos, id(font_icon_md), id(color_red),   TextAlign::CENTER_LEFT, "\U000F0054"); // arrow-right
+      it.printf(grid_text_x,  text1_pos, id(font_md),      id(color_red),   TextAlign::CENTER_LEFT, "%.0f kWh", id(grid_import_today).state); // import
+      it.print (grid_arrow_x, text2_pos, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F004D"); // arrow-left
+      it.printf(grid_text_x,  text2_pos, id(font_md),      id(color_black), TextAlign::CENTER_LEFT, "%.0f kWh", id(grid_export_today).state); // export
+
+      // -- solar: cumulative generation today (kWh) --
+      it.print (e_grid_offset + e_grid_x, icon_pos, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F0A72"); // solar-power
+      it.printf(e_grid_offset + e_grid_x, text1_pos, id(font_md),     id(color_black), TextAlign::CENTER, "%.0f kWh", id(solar_today).state);
+
+      // -- battery: current charge level (%) --
+      it.print (e_grid_offset + 2 * e_grid_x, icon_pos, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F1901"); // battery
+      it.printf(e_grid_offset + 2 * e_grid_x, text1_pos, id(font_md),     id(color_black), TextAlign::CENTER, "%.0f %%", id(home_batt_soc).state);
+
+      // -- home: current usage (W) --
+      it.print (e_grid_offset + 3 * e_grid_x, icon_pos, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F1903"); // home-lightning-bolt
+      it.printf(e_grid_offset + 3 * e_grid_x, text1_pos, id(font_md),     id(color_black), TextAlign::CENTER, "%.0f W", id(home_power).state);
+
+
+# ---------------------------------------------------------------------------
+# UPDATE SCRIPT
+# ---------------------------------------------------------------------------
+script:
+  # Wait for / sleep until the next refresh boundary.
+  #
+  # Deep sleep is SUSPENDED while the unit is forced awake (force_awake) or the
+  # charger is attached (CHRG/STDBY active). In that case we stay awake, wait for
+  # the next boundary, then re-render ("simulated" sleep). Otherwise, on battery,
+  # we really deep-sleep until the boundary.
+  #
+  # Can be called standalone (e.g. from force_awake -> off, which still re-checks
+  # the charger here) to put the unit to sleep, or as the tail of epd_update.
+  - id: enter_sleep
+    mode: restart
+    then:
+      - if:
+          condition:
+            # suspended while forced awake OR on charger
+            lambda: 'return id(force_awake).state || id(tp4056_chrg).state || id(tp4056_stdby).state;'
+          then:
+            # SUSPENDED -> stay awake, wait for the next boundary, then re-render
+            - delay: !lambda |-
+                auto t = id(ha_time).now();
+                if (!t.is_valid())
+                  return 30000;                                  // no time yet: retry soon
+                int iv    = (int) id(refresh_interval).state * 60;
+                int secs  = t.hour * 3600 + t.minute * 60 + t.second;
+                int delta = iv - (secs % iv);
+                ESP_LOGW("epd", "Sleep suspended; waiting %d seconds for next update", delta);
+                return (uint32_t)(delta + 2) * 1000;             // +2s guard
+            - script.execute: epd_update
+          else:
+            # ON BATTERY -> real deep sleep until the next boundary
+            - lambda: |-
+                auto t = id(ha_time).now();
+                uint32_t ms;
+                if (t.is_valid()) {
+                  int iv    = (int) id(refresh_interval).state * 60;
+                  int secs  = t.hour * 3600 + t.minute * 60 + t.second;
+                  int delta = iv - (secs % iv);
+                  ms = (uint32_t)(delta + 2) * 1000;                       // +2s guard
+                  ESP_LOGW("epd", "Going to sleep for %d seconds", delta);
+                } else {
+                  ms = (uint32_t) id(refresh_interval).state * 60 * 1000;  // no time -> full interval
+                  ESP_LOGW("epd", "No valid time on battery; full-interval sleep");
+                }
+                id(pwr_sleep).set_sleep_duration(ms);
+            - switch.turn_off: power_switch
+            - delay: 50ms
+            - lambda: "id(pwr_sleep).begin_sleep();"
+
+  - id: epd_update
+    mode: restart
+    then:
+      # 1) wait until every registered sensor has a state (max 30s).
+      #    The WiFi -> API -> HA handshake on a cold boot takes ~17s before any
+      #    HA sensor data arrives, so a too-short timeout renders all-NaN.
+      - wait_until:
+          condition:
+            lambda: |-
+              for (auto &ready : id(sensor_ready_checks))
+                if (!ready()) return false;
+              return true;
+          timeout: 30s
+
+      # 1a) short delay
+      - delay: 50ms
+
+      # 2) render
+      - component.update: epd_display
+
+      # 3) wait for / sleep until the next refresh boundary
+      - script.execute: enter_sleep

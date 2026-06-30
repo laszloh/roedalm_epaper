@@ -1,0 +1,135 @@
+- trigger:
+    - platform: time_pattern
+      minutes: "/15"
+  action:
+    - variables:
+        # --- DEFINE YOUR CONFIGURATION HERE ---
+        my_weather: "weather.openweathermap"
+        my_calendar: "calendar.family_calendar"
+        # --------------------------------------
+    - service: weather.get_forecasts
+      data:
+        type: daily
+      target:
+        entity_id: "{{ my_weather }}"
+      response_variable: weather_data
+    - service: calendar.get_events
+      data:
+        end_date_time: "{{ (now() + timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S') }}"
+      target:
+        entity_id: "{{ my_calendar }}"
+      response_variable: next_events
+  sensor:
+    # Weather Forecast Sensors
+    - name: "Display data packed"
+      unique_id: display_data
+      state: "{{ now().isoformat() }}"
+      attributes:
+        forecast: >
+          {% set out = namespace(items=[]) %}
+            {% for f in weather_data[my_weather].forecast[:4] %}
+            {% set wd = (as_datetime(f.datetime) | as_local).isoweekday() %}
+              {% set out.items = out.items + [
+                wd ~ '|' ~ f.condition ~ '|' ~ (f.temperature | round(1)) ~ '|' ~ (f.templow | round(1))
+              ] %}
+            {% endfor %}
+            {{ out.items | join(';') }}
+        events: >
+          {% set out = namespace(items=[]) %}
+            {% for e in next_events[my_calendar]['events'][:2] %}
+              {% set out.items = out.items + [
+                as_timestamp(e.start) ~ '|' ~ as_timestamp(e.end) ~ '|' ~ (e.summary | replace(';', ','))
+              ] %}
+            {% endfor %}
+            {{ out.items | join(';') }}
+
+# --- Cumulative grid sensors (daily totals from the meter's lifetime counters) ---
+# The Shelly Pro 3EM already reports ever-increasing kWh totals, so "today" is
+# just (current total - the total captured at last midnight).
+- trigger:
+    # Update whenever the meter readings change.
+    - platform: state
+      entity_id:
+        - sensor.shellypro3em_fce8c0d8acec_total_active_energy
+        - sensor.shellypro3em_fce8c0d8acec_total_active_returned_energy
+        - sensor.solar_total_energy
+    # Reset the daily baseline at midnight.
+    - platform: time
+      at: "00:00:00"
+    # Re-evaluate on restart (baseline is restored from the recorder).
+    - platform: homeassistant
+      event: start
+  action:
+    - variables:
+        # --- DEFINE YOUR CONFIGURATION HERE ---
+        my_grid_import: "sensor.shellypro3em_fce8c0d8acec_total_active_energy"
+        my_grid_export: "sensor.shellypro3em_fce8c0d8acec_total_active_returned_energy"
+        my_solar_total: "sensor.solar_total_energy"   # solar inverter lifetime kWh counter
+        # --------------------------------------
+  sensor:
+    # 1. Energy drawn from the grid today (resets at midnight)
+    - name: "Grid Energy Imported Today"
+      unique_id: grid_energy_imported_today
+      device_class: energy
+      state_class: total_increasing
+      unit_of_measurement: "kWh"
+      state: >
+        {% set total = states(my_grid_import) | float(0) %}
+        {% set baseline = this.attributes.get('import_baseline', total) | float(total) %}
+        {# Reset baseline at midnight, or if the meter counter rolled back below it #}
+        {% if trigger.platform == 'time' or total < baseline %}
+          {% set baseline = total %}
+        {% endif %}
+        {{ (total - baseline) | round(3) }}
+      attributes:
+        import_baseline: >
+          {% set total = states(my_grid_import) | float(0) %}
+          {% set baseline = this.attributes.get('import_baseline', total) | float(total) %}
+          {% if trigger.platform == 'time' or total < baseline %}
+            {% set baseline = total %}
+          {% endif %}
+          {{ baseline }}
+
+    # 2. Energy returned to the grid today (resets at midnight)
+    - name: "Grid Energy Returned Today"
+      unique_id: grid_energy_returned_today
+      device_class: energy
+      state_class: total_increasing
+      unit_of_measurement: "kWh"
+      state: >
+        {% set total = states(my_grid_export) | float(0) %}
+        {% set baseline = this.attributes.get('export_baseline', total) | float(total) %}
+        {% if trigger.platform == 'time' or total < baseline %}
+          {% set baseline = total %}
+        {% endif %}
+        {{ (total - baseline) | round(3) }}
+      attributes:
+        export_baseline: >
+          {% set total = states(my_grid_export) | float(0) %}
+          {% set baseline = this.attributes.get('export_baseline', total) | float(total) %}
+          {% if trigger.platform == 'time' or total < baseline %}
+            {% set baseline = total %}
+          {% endif %}
+          {{ baseline }}
+
+    # 3. Solar energy generated today (resets at midnight)
+    - name: "Solar Energy Generated Today"
+      unique_id: solar_energy_generated_today
+      device_class: energy
+      state_class: total_increasing
+      unit_of_measurement: "kWh"
+      state: >
+        {% set total = states(my_solar_total) | float(0) %}
+        {% set baseline = this.attributes.get('solar_baseline', total) | float(total) %}
+        {% if trigger.platform == 'time' or total < baseline %}
+          {% set baseline = total %}
+        {% endif %}
+        {{ (total - baseline) | round(3) }}
+      attributes:
+        solar_baseline: >
+          {% set total = states(my_solar_total) | float(0) %}
+          {% set baseline = this.attributes.get('solar_baseline', total) | float(total) %}
+          {% if trigger.platform == 'time' or total < baseline %}
+            {% set baseline = total %}
+          {% endif %}
+          {{ baseline }}
