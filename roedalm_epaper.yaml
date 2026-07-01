@@ -293,6 +293,28 @@ binary_sensor:
             lambda: 'return id(boot_done);'
           then:
             - script.execute: epd_update
+  - platform: gpio
+    pin:
+      number: GPIO12
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    id: phy_force_awake
+    name: "Physical force awake"
+    filters:
+      - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
+    on_state:
+      # ignore the initial state published during boot (on_boot drives the
+      # first render); only re-render on real charger changes afterwards
+      - if:
+          condition:
+            lambda: 'return id(boot_done);'
+          then:
+            - switch.template.publish: 
+                id: force_awake
+                state: ON
+            - script.execute: epd_update
 
 
 number:
@@ -324,11 +346,18 @@ switch:
     # turned off -> re-evaluate sleep immediately (still honors the charger),
     # but ignore the OFF state restored during boot
     on_turn_off:
-      - if:
-          condition:
-            lambda: 'return id(boot_done);'
+      - if: 
+          condition: 
+            binary_sensor.is_on: phy_force_awake
           then:
-            - script.execute: enter_sleep
+            - logger.log: "Physical force awake is active"
+            - switch.turn_on: force_awake
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(boot_done);'
+                then:
+                  - script.execute: enter_sleep
 
 
 deep_sleep:
