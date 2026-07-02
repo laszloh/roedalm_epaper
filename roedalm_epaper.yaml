@@ -95,6 +95,9 @@ captive_portal:
 
 
 sensor:
+  # board uptime
+  - platform: uptime
+    name: Uptime
   # esphome sensors
   - platform: wifi_signal
     name: "WiFi Signal dB"
@@ -203,6 +206,7 @@ datetime:
   - platform: template
     type: time
     id: next_wakeup
+    update_interval: 5s
     internal: true
     entity_category: diagnostic
     set_action: 
@@ -218,6 +222,17 @@ datetime:
 
 
 text_sensor:
+  # ESPHome version string
+  - platform: version
+    name: ESPHome Version
+    # fancy wifi information
+  - platform: wifi_info
+    ip_address:
+      name: IP
+    ssid:
+      name: SSID
+    bssid:
+      name: BSSID
   - platform: template
     name: "Next Wakeup"
     id: next_wakeup_str
@@ -251,7 +266,7 @@ text_sensor:
     internal: true
     entity_id: sensor.display_data_packed
     attribute: events
-
+    
 
 binary_sensor:
   - platform: gpio
@@ -305,8 +320,19 @@ binary_sensor:
     filters:
       - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
     on_state:
-      - script.execute: epd_update
+      # ignore the initial state published during boot (on_boot drives the
+      # first render); only re-render on real switch changes afterwards
+      - if:
+          condition:
+            lambda: 'return id(boot_done);'
+          then:
+            - script.execute: epd_update
 
+
+button:
+  - platform: restart
+    name: "Reboot"
+              
 
 number:
   - platform: template
@@ -352,6 +378,10 @@ deep_sleep:
     mode: INPUT_PULLUP
   wakeup_pin_mode: INVERT_WAKEUP
 
+  
+status_led:
+  pin: GPIO2
+  
 
 time:
   - platform: homeassistant
@@ -890,8 +920,28 @@ script:
       # 1a) short delay
       - delay: 50ms
 
-      # 2) render
+      # 1b) recompute the next-wakeup time/string from the now-valid HA time.
+      #     Both are template entities on the default 60s poll; on a cold boot
+      #     their first poll runs before time sync, so without this the render
+      #     would draw the stale 00:00. next_wakeup first, then the string that
+      #     formats it.
+      - component.update: next_wakeup
+      - component.update: next_wakeup_str
+
+      # 2) render (async: component.update only STARTS the state machine;
+      #    the panel refresh runs over many loop()s, gated by the BUSY pin)
       - component.update: epd_display
+
+      # 2a) wait for the refresh to actually finish before we may deep-sleep.
+      #     Without this the ESP deep-sleeps / cuts panel power ~50ms after the
+      #     refresh merely started, leaving the panel blank.
+      #     First wait for BUSY to assert (refresh started), then for it to
+      #     clear (refresh done). Timeouts guard against a stuck/absent signal.
+      - wait_until: 
+          condition:
+            - lambda: 'return !id(epd_display).is_busy();'
+          timeout: 45s
+      - delay: 200ms
 
       # 3) wait for / sleep until the next refresh boundary
       - script.execute: enter_sleep
