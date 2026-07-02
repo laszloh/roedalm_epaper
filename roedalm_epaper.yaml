@@ -295,7 +295,7 @@ binary_sensor:
             - script.execute: epd_update
   - platform: gpio
     pin:
-      number: GPIO12
+      number: GPIO23
       inverted: true
       mode:
         input: true
@@ -305,16 +305,7 @@ binary_sensor:
     filters:
       - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
     on_state:
-      # ignore the initial state published during boot (on_boot drives the
-      # first render); only re-render on real charger changes afterwards
-      - if:
-          condition:
-            lambda: 'return id(boot_done);'
-          then:
-            - switch.template.publish: 
-                id: force_awake
-                state: ON
-            - script.execute: epd_update
+      - script.execute: epd_update
 
 
 number:
@@ -346,18 +337,11 @@ switch:
     # turned off -> re-evaluate sleep immediately (still honors the charger),
     # but ignore the OFF state restored during boot
     on_turn_off:
-      - if: 
-          condition: 
-            binary_sensor.is_on: phy_force_awake
+      - if:
+          condition:
+            lambda: 'return id(boot_done);'
           then:
-            - logger.log: "Physical force awake is active"
-            - switch.turn_on: force_awake
-          else:
-            - if:
-                condition:
-                  lambda: 'return id(boot_done);'
-                then:
-                  - script.execute: enter_sleep
+            - script.execute: enter_sleep
 
 
 deep_sleep:
@@ -462,6 +446,7 @@ font:
       - "\U000F10CD"   # battery critical          (top-right)
       - "\U000F05A9"   # wifi                      (top-right link status)
       - "\U000F05AA"   # wifi off                  (top-right link status)
+      - "\U000F0ECD"   # sleep off alert           (top-left)
       - "\U000F06B0"   # reload                    (top-right next refresh)
       - "\U000F0A72"   # solar-power               (energy: solar)
       - "\U000F0D3E"   # transmission-tower        (energy: grid)
@@ -582,6 +567,10 @@ display:
         constexpr size_t icon_text_offset = 30;
 
         // HEADER
+        //sleep disabled warning
+        if(id(force_awake).state || id(phy_force_awake).state)
+          it.print(margin, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F0ECD");
+
         // next planned refresh
         it.print(245, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F06B0");
         it.print(270, status_text_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, id(next_wakeup_str).state.c_str());
@@ -851,7 +840,7 @@ script:
       - if:
           condition:
             # suspended while forced awake OR on charger
-            lambda: 'return id(force_awake).state || id(tp4056_chrg).state || id(tp4056_stdby).state;'
+            lambda: 'return id(force_awake).state || id(phy_force_awake).state || id(tp4056_chrg).state || id(tp4056_stdby).state;'
           then:
             # SUSPENDED -> stay awake, wait for the next boundary, then re-render
             - delay: !lambda |-
