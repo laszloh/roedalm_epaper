@@ -9,6 +9,7 @@ esphome:
       - lambda: |-
           // register every sensor whose state we want before a render
           id(sensor_ready_checks) = {
+            []{ return id(refresh_interval).has_state(); },
             []{ return id(weather_temperature).has_state(); },
             []{ return id(weather_humidity).has_state(); },
             []{ return id(weather_pressure).has_state(); },
@@ -138,6 +139,9 @@ sensor:
           - 3.87 -> 30
           - 3.81 -> 20
           - 3.76 -> 10
+      - clamp:
+          min_value: 0.0
+          max_value: 100.0
     unit_of_measurement: "%"
     entity_category: diagnostic
     device_class: ""
@@ -218,6 +222,9 @@ datetime:
       int iv = (int) id(refresh_interval).state * 60;
       int secs = t.hour * 3600 + t.minute * 60 +  t.second;
       int delta = iv - (secs % iv);
+      // deep-sleep timer drift can wake us up to ~1 min early: an imminent
+      // boundary is the one THIS render serves, so target the one after it
+      if (delta < 60) delta += iv;
       return ESPTime::from_epoch_local(t.timestamp + delta);
 
 
@@ -404,11 +411,6 @@ font:
     size: 32
     bpp: 4
     glyphsets: ["GF_Latin_Core"]
-  - file: { type: gfonts, family: Nunito, weight: 400 }
-    id: font_lg              # forecast temps + energy values (smallest = 24)
-    size: 24
-    bpp: 4
-    glyphsets: ["GF_Latin_Core"]
   - file: { type: gfonts, family: Nunito, weight: 700 }
     id: font_md_b            # day names + calendar event titles (bold)
     size: 24
@@ -420,30 +422,30 @@ font:
     bpp: 2
     glyphsets: ["GF_Latin_Core"]
   - file: { type: gfonts, family: Nunito, weight: 400 }
-    id: font_sm              # (kept for compatibility; now also 24)
+    id: font_sm              # forecast temps + energy values
     size: 24
     bpp: 4
     glyphsets: ["GF_Latin_Core"]
 
   # ---- Material Design Icons -------------------------------------------
-  # THREE SIZE TIERS — pick the tier by which font id you call in the lambda:
-  #   font_icon_lg (52)  -> weather CONDITION icons (current + forecast)
-  #   font_icon_md (32)  -> "main" icons next to a value (humidity, pressure,
-  #                          wind, thermometer, calendar, location pin)
-  #   font_icon_sm (22)  -> battery, wifi, and all energy-flow icons
+  # Glyphs are split per size tier to match actual lambda usage:
+  #   xl (90) / lg (52) -> weather CONDITION glyphs only
+  #   md (32)           -> value icons (humidity, pressure, wind, thermometer,
+  #                        calendar) + all energy-section icons and arrows
+  #   sm (22)           -> status row: battery, wifi, sleep-off, reload
+
+  # -- weather conditions (must cover every value in the WX_ICONS map) ----
   - file: &mdi_src
       type: web
       # Material Design Icons, pinned. Bump the @version to update; check the
       # latest at https://www.npmjs.com/package/@mdi/font
       url: "https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/fonts/materialdesignicons-webfont.ttf"
-    id: font_icon_lg
-    size: 52
-    glyphs: &mdi_glyphs
-      # -- weather conditions (match Home Assistant `weather` states) -----
+    id: font_icon_xl          # big current-weather condition icon
+    size: 90
+    glyphs: &mdi_weather_glyphs
       - "\U000F0599"   # weather-sunny             (sunny / clear-day)
       - "\U000F0594"   # weather-night             (clear-night)
-      - "\U000F0595"   # weather-partly-cloudy     (partlycloudy)
-      - "\U000F0F31"   # weather-night-partly-cloudy
+      - "\U000F0595"   # weather-partly-cloudy     (partlycloudy + fallback)
       - "\U000F0590"   # weather-cloudy            (cloudy)
       - "\U000F0591"   # weather-fog               (fog)
       - "\U000F0592"   # weather-hail              (hail)
@@ -453,51 +455,50 @@ font:
       - "\U000F0597"   # weather-rainy             (rainy)
       - "\U000F0598"   # weather-snowy             (snowy)
       - "\U000F067F"   # weather-snowy-rainy       (snowy-rainy)
-      - "\U000F0F36"   # weather-snowy-heavy
-      - "\U000F059D"   # weather-windy             (windy / wind value icon)
+      - "\U000F059D"   # weather-windy             (windy)
       - "\U000F059E"   # weather-windy-variant     (windy-variant)
-      - "\U000F0026"   # alert                     (exceptional / fallback)
-      # -- main icons (size 32 in lambda) ---------------------------------
-      - "\U000F058E"   # water-percent             (humidity)
-      - "\U000F029A"   # gauge                     (pressure)
-      - "\U000F0034"   # map-marker                (location pin)
-      - "\U000F050F"   # thermometer               (room temp)
-      - "\U000F00ED"   # calendar                  (calendar events)
-      # -- small icons (size 22 in lambda) --------------------------------
-      - "\U000F125E"   # battery unknown           (top-right)
-      - "\U000F1211"   # battery fully charged     (top-right)
-      - "\U000F12A6"   # battery full charging     (top-right)
-      - "\U000F12A5"   # battery medium charging   (top-right)
-      - "\U000F12A4"   # battery low charging      (top-right)
-      - "\U000F089F"   # battery critical charging (top-right)
-      - "\U000F12A3"   # battery full              (top-right)
-      - "\U000F12A2"   # battery medium            (top-right)
-      - "\U000F12A1"   # battery low               (top-right)
-      - "\U000F10CD"   # battery critical          (top-right)
-      - "\U000F05A9"   # wifi                      (top-right link status)
-      - "\U000F05AA"   # wifi off                  (top-right link status)
-      - "\U000F0ECD"   # sleep off alert           (top-left)
-      - "\U000F06B0"   # reload                    (top-right next refresh)
-      - "\U000F0A72"   # solar-power               (energy: solar)
-      - "\U000F0D3E"   # transmission-tower        (energy: grid)
-      - "\U000F02DC"   # home                      (energy: house)
-      - "\U000F1901"   # home-battery              (energy: battery)
-      - "\U000F1903"   # home-lightning-bolt       (energy: home w/ spark) *verify codepoint*
-      - "\U000F0241"   # flash                     (energy: power)
-      - "\U000F004D"   # arrow-left
-      - "\U000F0054"   # arrow-right
+      - "\U000F0026"   # alert                     (exceptional)
+
+  - file: *mdi_src
+    id: font_icon_lg          # forecast condition icons
+    size: 52
+    glyphs: *mdi_weather_glyphs
+
+  # -- value + energy icons (drawn with font_icon_md in the lambda) -------
   - file: *mdi_src
     id: font_icon_md
     size: 32
-    glyphs: *mdi_glyphs
+    glyphs:
+      - "\U000F058E"   # water-percent             (weather + room humidity)
+      - "\U000F029A"   # gauge                     (pressure)
+      - "\U000F059D"   # weather-windy             (wind row value icon)
+      - "\U000F050F"   # thermometer               (room temp)
+      - "\U000F00ED"   # calendar                  (calendar events)
+      - "\U000F0D3E"   # transmission-tower        (energy: grid)
+      - "\U000F0A72"   # solar-power               (energy: solar)
+      - "\U000F1901"   # home-battery              (energy: battery)
+      - "\U000F1903"   # home-lightning-bolt       (energy: home) *verify codepoint*
+      - "\U000F0054"   # arrow-right               (grid import)
+      - "\U000F004D"   # arrow-left                (grid export)
+
+  # -- status row icons (drawn with font_icon_sm in the lambda) -----------
   - file: *mdi_src
     id: font_icon_sm
     size: 22
-    glyphs: *mdi_glyphs
-  - file: *mdi_src
-    id: font_icon_xl          # big current-weather condition icon
-    size: 90
-    glyphs: *mdi_glyphs
+    glyphs:
+      - "\U000F0ECD"   # sleep-off alert           (top-left)
+      - "\U000F06B0"   # reload                    (next refresh)
+      - "\U000F05A9"   # wifi                      (API connected)
+      - "\U000F05AA"   # wifi-off                  (API disconnected)
+      - "\U000F125E"   # battery-unknown
+      - "\U000F1211"   # battery-charging-100      (on charger, full)
+      - "\U000F12A6"   # battery charging high
+      - "\U000F12A5"   # battery charging medium
+      - "\U000F12A4"   # battery charging low/critical
+      - "\U000F12A3"   # battery high
+      - "\U000F12A2"   # battery medium
+      - "\U000F12A1"   # battery low
+      - "\U000F10CD"   # battery critical
 
 # ---------------------------------------------------------------------------
 # COLORS
@@ -657,7 +658,7 @@ display:
       // =================================================================
       constexpr size_t weather_start = 40;
       constexpr size_t weather_row_h = 40;
-      constexpr size_t weather_row1 = weather_start + 60;              // hhumidity
+      constexpr size_t weather_row1 = weather_start + 60;              // humidity
       constexpr size_t weather_row2 = weather_row1 + weather_row_h;    // pressure
       constexpr size_t weather_row3 = weather_row2 + weather_row_h;    // wind
       constexpr size_t weather_temp_y = weather_start + 30;            // big temp
@@ -684,7 +685,7 @@ display:
       // map the wind bearing (degrees, 0 = N) to an 8-point compass label
       static const char* WIND_DIRS[] = { "N", "NO", "O", "SO", "S", "SW", "W", "NW" };
       const float wind_bearing = id(weather_wind_bearing).state;
-      const char* wind_dir = isnan(wind_bearing) ? "?" : WIND_DIRS[((int) roundf(wind_bearing / 45.0f)) % 8];
+      const char* wind_dir = isnan(wind_bearing) ? "?" : WIND_DIRS[((int) roundf(wind_bearing / 45.0f) % 8 + 8) % 8];
       it.printf(60, weather_row3, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "(%s) %.1f km/h", wind_dir, id(weather_wind_speed).state);
 
       // =================================================================
@@ -719,6 +720,9 @@ display:
           this->max  = atof(tok.substr(p2 + 1, p3 - p2 - 1).c_str());
           this->min  = atof(tok.substr(p3 + 1).c_str());
         }
+
+        // valid only if the packed token parsed to a real weekday
+        explicit operator bool() const { return wd[0] != '\0'; }
       };
 
       // pull one ';'-separated day token, then index its '|' fields
@@ -738,9 +742,10 @@ display:
       for (int i = 0; i < 4; i++) {
         const size_t x_offset = margin + i * fc_column_x + fc_column_x / 2 ;
         Forecast fc = fc_field(days, i);
+        if (!fc) continue;   // missing day: leave the column blank (no "nan°")
         it.print(x_offset, fc_day_y, id(font_md_b), id(color_black), TextAlign::BASELINE_CENTER, fc.wd);
         it.print(x_offset, fc_icon_y, id(font_icon_lg), id(color_black), TextAlign::CENTER, fc.icon);
-        it.printf(x_offset, fc_temp_y, id(font_lg), id(color_black), TextAlign::BASELINE_CENTER, "%.0f° / %.0f°", fc.max, fc.min);
+        it.printf(x_offset, fc_temp_y, id(font_sm), id(color_black), TextAlign::BASELINE_CENTER, "%.0f° / %.0f°", fc.max, fc.min);
       }
 
       // =================================================================
@@ -780,18 +785,21 @@ display:
           std::string tok(packed);
           size_t p1 = tok.find('|');         if (p1 == std::string::npos) return;
           size_t p2 = tok.find('|', p1 + 1); if (p2 == std::string::npos) return;
-          this->start = atoi(tok.substr(0, p1).c_str());
-          this->end = atoi(tok.substr(p1 + 1, p2 - p1 - 1).c_str());
+          this->start = strtoll(tok.substr(0, p1).c_str(), nullptr, 10);
+          this->end   = strtoll(tok.substr(p1 + 1, p2 - p1 - 1).c_str(), nullptr, 10);
           this->summary = tok.substr(p2 + 1);
         }
+
+        // valid = has a real start timestamp AND a non-empty summary
+        explicit operator bool() const { return start != 0 && !summary.empty(); }
       };
 
-      // pull one ';'-separated day token, then index its '|' fields
+      // pull one ';'-separated event token, then index its '|' fields
       const auto event_field = [&](const std::string &events, int n) -> CalEvent {
         size_t s = 0;
         for (int d = 0; d < n; d++) {
           s = events.find(';', s);
-          if (s == std::string::npos) return CalEvent{};   // fewer days than asked
+          if (s == std::string::npos) return CalEvent{};   // fewer events than asked
           s++;
         }
         size_t e = events.find(';', s);
@@ -800,6 +808,7 @@ display:
       };
 
       const auto draw_events = [&](int y, CalEvent event) {
+        if (!event) return;   // empty slot: draw nothing (no 01.01.1970)
         it.print(200, y, id(font_md_b), id(color_black), TextAlign::TOP_LEFT, event.summary.c_str());
         const ESPTime t = ESPTime::from_epoch_local(event.start);
         it.strftime(200, y + 50, id(font_md), id(color_black), TextAlign::BOTTOM_LEFT, "%d.%m.%Y %H:%M", t);
@@ -822,7 +831,7 @@ display:
       constexpr size_t text1_pos = icon_pos + 30;
       constexpr size_t text2_pos = text1_pos + 30;
 
-      draw_header(630, "ENERGY");
+      draw_header(energy_start, "ENERGY");
 
       // column centers (evenly spaced across the width)
       constexpr size_t e_grid_x = (width - 2 * margin) / 4;
@@ -864,6 +873,11 @@ script:
   #
   # Can be called standalone (e.g. from force_awake -> off, which still re-checks
   # the charger here) to put the unit to sleep, or as the tail of epd_update.
+  #
+  # NOTE on boundary math: the deep-sleep timer (RC osc) drifts, so we can wake
+  # up to ~1 min EARLY for a boundary. A delta < 60 s therefore means "we are
+  # already serving this boundary" -> roll over to the next one. The same guard
+  # is applied in the next_wakeup datetime so the displayed time matches.
   - id: enter_sleep
     mode: restart
     then:
@@ -880,10 +894,16 @@ script:
                 int iv    = (int) id(refresh_interval).state * 60;
                 int secs  = t.hour * 3600 + t.minute * 60 + t.second;
                 int delta = iv - (secs % iv);
+                if (delta < 60) delta += iv;                     // imminent boundary already served
                 ESP_LOGW("epd", "Sleep suspended; waiting %d seconds for next update", delta);
                 return (uint32_t)(delta + 2) * 1000;             // +2s guard
             - script.execute: epd_update
           else:
+            # never cut panel power while a refresh is still running
+            - wait_until:
+                condition:
+                  lambda: 'return !id(epd_display).is_busy();'
+                timeout: 45s
             # ON BATTERY -> real deep sleep until the next boundary
             - lambda: |-
                 auto t = id(ha_time).now();
@@ -892,7 +912,8 @@ script:
                   int iv    = (int) id(refresh_interval).state * 60;
                   int secs  = t.hour * 3600 + t.minute * 60 + t.second;
                   int delta = iv - (secs % iv);
-                  ms = (uint32_t)(delta + 2) * 1000;                       // +2s guard
+                  if (delta < 60) delta += iv;                           // imminent boundary already served
+                  ms = (uint32_t)(delta + 2) * 1000;                     // +2s guard
                   ESP_LOGW("epd", "Going to sleep for %d seconds", delta);
                 } else {
                   ms = (uint32_t) id(refresh_interval).state * 60 * 1000;  // no time -> full interval
@@ -904,7 +925,7 @@ script:
             - lambda: "id(pwr_sleep).begin_sleep();"
 
   - id: epd_update
-    mode: restart
+    mode: queued 
     then:
       # 1) wait until every registered sensor has a state (max 30s).
       #    The WiFi -> API -> HA handshake on a cold boot takes ~17s before any
@@ -921,10 +942,6 @@ script:
       - delay: 50ms
 
       # 1b) recompute the next-wakeup time/string from the now-valid HA time.
-      #     Both are template entities on the default 60s poll; on a cold boot
-      #     their first poll runs before time sync, so without this the render
-      #     would draw the stale 00:00. next_wakeup first, then the string that
-      #     formats it.
       - component.update: next_wakeup
       - component.update: next_wakeup_str
 
@@ -933,10 +950,6 @@ script:
       - component.update: epd_display
 
       # 2a) wait for the refresh to actually finish before we may deep-sleep.
-      #     Without this the ESP deep-sleeps / cuts panel power ~50ms after the
-      #     refresh merely started, leaving the panel blank.
-      #     First wait for BUSY to assert (refresh started), then for it to
-      #     clear (refresh done). Timeouts guard against a stuck/absent signal.
       - wait_until: 
           condition:
             - lambda: 'return !id(epd_display).is_busy();'
