@@ -280,7 +280,6 @@ binary_sensor:
     pin: 
       number: GPIO32
       inverted: true
-      allow_other_uses: true
       mode: 
         input: true
         pullup: true
@@ -334,7 +333,20 @@ binary_sensor:
             lambda: 'return id(boot_done);'
           then:
             - script.execute: epd_update
-
+  - platform: gpio
+    pin:
+      number: GPIO12
+      inverted: true
+      allow_other_uses: true
+      mode:
+        input: true
+        pullup: true
+    id: wake_any
+    name: "Wake source active"
+    entity_category: diagnostic
+    filters:
+      - delayed_on_off: 20ms
+        
 
 button:
   - platform: restart
@@ -380,7 +392,7 @@ switch:
 deep_sleep:
   id: pwr_sleep
   wakeup_pin: 
-    number: GPIO32
+    number: GPIO12
     allow_other_uses: true
     mode: INPUT_PULLUP
   wakeup_pin_mode: INVERT_WAKEUP
@@ -599,8 +611,10 @@ display:
 
         // HEADER
         //sleep disabled warning
-        if(id(force_awake).state || id(phy_force_awake).state)
+        if(id(force_awake).state || id(phy_force_awake).state) {
           it.print(margin, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F0ECD");
+          it.print(margin + 25, status_text_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, "awake");
+        }
 
         // next planned refresh
         it.print(245, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F06B0");
@@ -883,8 +897,10 @@ script:
     then:
       - if:
           condition:
-            # suspended while forced awake OR on charger
-            lambda: 'return id(force_awake).state || id(phy_force_awake).state || id(tp4056_chrg).state || id(tp4056_stdby).state;'
+            # suspended while forced awake (software) OR any hardware wake
+            # source is active (charger CHRG/STDBY or physical switch,
+            # diode-ORed onto GPIO12)
+            lambda: 'return id(force_awake).state || id(wake_any).state;'
           then:
             # SUSPENDED -> stay awake, wait for the next boundary, then re-render
             - delay: !lambda |-
