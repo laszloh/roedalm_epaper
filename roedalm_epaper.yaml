@@ -55,6 +55,10 @@ globals:
   - id: sensor_ready_checks
     type: std::vector<std::function<bool()>>
     restore_value: no
+  - id: sensor_refresh_success
+    type: bool
+    restore_value: no
+    initial_value: 'false'
   # false until on_boot completes; stops the force_awake restore at boot from
   # triggering an immediate (pre-render, pre-time-sync) deep sleep
   - id: boot_done
@@ -973,31 +977,38 @@ script:
       # 1) wait until every registered sensor has a state (max 30s).
       #    The WiFi -> API -> HA handshake on a cold boot takes ~17s before any
       #    HA sensor data arrives, so a too-short timeout renders all-NaN.
+      - lambda: "id(sensor_refresh_success) = false;"
       - wait_until:
           condition:
             lambda: |-
               for (auto &ready : id(sensor_ready_checks))
                 if (!ready()) return false;
+              id(sensor_refresh_success) = true;
               return true;
           timeout: 30s
 
-      # 1a) short delay
-      - delay: 50ms
-
-      # 1b) recompute the next-wakeup time/string from the now-valid HA time.
-      - component.update: next_wakeup
-      - component.update: next_wakeup_str
-
-      # 2) render (async: component.update only STARTS the state machine;
-      #    the panel refresh runs over many loop()s, gated by the BUSY pin)
-      - component.update: epd_display
-
-      # 2a) wait for the refresh to actually finish before we may deep-sleep.
-      - wait_until: 
+      # 1) Check if new data for the display is avaliable
+      - if:
           condition:
-            - lambda: 'return !id(epd_display).is_busy();'
-          timeout: 45s
-      - delay: 200ms
+            lambda: "return id(sensor_refresh_success);"
+          then:
+            # 1a) short delay
+            - delay: 50ms
+
+            # 1b) recompute the next-wakeup time/string from the now-valid HA time.
+            - component.update: next_wakeup
+            - component.update: next_wakeup_str
+
+            # 2) render (async: component.update only STARTS the state machine;
+            #    the panel refresh runs over many loop()s, gated by the BUSY pin)
+            - component.update: epd_display
+
+            # 2a) wait for the refresh to actually finish before we may deep-sleep.
+            - wait_until: 
+                condition:
+                  - lambda: 'return !id(epd_display).is_busy();'
+                timeout: 45s
+            - delay: 200ms
 
       # 3) wait for / sleep until the next refresh boundary
       - script.execute: enter_sleep
