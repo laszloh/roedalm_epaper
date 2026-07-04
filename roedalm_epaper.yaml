@@ -153,7 +153,9 @@ sensor:
     internal: true
     id: weather_temperature
   - platform: homeassistant
-    entity_id: weather.pirateweather
+    attribute: max_today
+    internal: true
+    id: weather_max_temp
     attribute: humidity
     internal: true
     id: weather_humidity
@@ -351,7 +353,7 @@ binary_sensor:
 button:
   - platform: restart
     name: "Reboot"
-              
+
 
 number:
   - platform: template
@@ -482,6 +484,7 @@ font:
     size: 32
     glyphs:
       - "\U000F058E"   # water-percent             (weather + room humidity)
+      - "\U000F0E03"   # thermometer-chevron-up    (max today temperature)
       - "\U000F029A"   # gauge                     (pressure)
       - "\U000F059D"   # weather-windy             (wind row value icon)
       - "\U000F050F"   # thermometer               (room temp)
@@ -566,7 +569,7 @@ display:
       constexpr size_t width = 480;
       constexpr size_t height = 800;
       constexpr size_t margin = 20;
-      constexpr size_t icon_margin = 10;
+      constexpr size_t icon_margin = 0;
 
       // --- map a Home Assistant weather state -> MDI glyph --------------
       // Built once (static) and reused on every render.
@@ -617,11 +620,9 @@ display:
         }
 
         // next planned refresh
-        it.print(245, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F06B0");
-        it.print(270, status_text_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, id(next_wakeup_str).state.c_str());
-        
-        const char *wifi_icon = (id(ha_api).is_connected()) ? "\U000F05A9" : "\U000F05AA";
-        it.print(340, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, wifi_icon); // wifi state
+        constexpr size_t refresh_icon_pos_x = 300;
+        it.print(refresh_icon_pos_x, status_icon_y, id(font_icon_sm), id(color_black), TextAlign::CENTER_LEFT, "\U000F06B0");
+        it.print(refresh_icon_pos_x + icon_text_offset, status_text_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, id(next_wakeup_str).state.c_str());
 
         const char *bat_icon = "\U000F125E"; // unknown
         auto bat = id(batt_pct).state;
@@ -657,9 +658,6 @@ display:
           it.strftime(width/2, footer_text_y, id(font_md), id(color_black), TextAlign::BOTTOM_CENTER, "Last update: %d.%m.%Y %H:%M", t);
       };
 
-      // draw header and footer
-      draw_chrome();
-
       const auto draw_header = [&](int y, const char *text) {
         constexpr size_t band_h = 36;
 
@@ -667,45 +665,56 @@ display:
         it.print(width / 2, y + band_h / 2, id(font_header), id(color_white), TextAlign::CENTER, text);
       };
 
+
+      // we are drwaing from here on
+
+      // draw header and footer
+      draw_chrome();
+
       // =================================================================
       // WEATHER
       // =================================================================
       constexpr size_t weather_start = 40;
       constexpr size_t weather_row_h = 40;
-      constexpr size_t weather_row1 = weather_start + 60;              // humidity
-      constexpr size_t weather_row2 = weather_row1 + weather_row_h;    // pressure
-      constexpr size_t weather_row3 = weather_row2 + weather_row_h;    // wind
+      constexpr size_t weather_row1 = weather_start + 60;              // max temp
+      constexpr size_t weather_row2 = weather_row1 + weather_row_h;    // humidity
+      constexpr size_t weather_row3 = weather_row2 + weather_row_h;    // pressure
+      constexpr size_t weather_row4 = weather_row3 + weather_row_h;    // wind
       constexpr size_t weather_temp_y = weather_start + 30;            // big temp
-      constexpr size_t weather_icon_y = weather_start + 130;           // condition
+      constexpr size_t weather_icon_y = weather_start + 140;           // condition
 
       draw_header(weather_start, "WEATHER");
 
       // big current temperature
-      it.printf(360, weather_temp_y, id(font_big), id(color_black), TextAlign::TOP_CENTER, "%.1f°C", id(weather_temperature).state);
+      it.printf(370, weather_temp_y, id(font_big), id(color_black), TextAlign::TOP_CENTER, "%.1f°C", id(weather_temperature).state);
 
       // current condition
-      it.print(360, weather_icon_y, id(font_icon_xl), id(color_black), TextAlign::CENTER, wx_icon(id(weather_symbol).state));
-
+      it.print(370, weather_icon_y, id(font_icon_xl), id(color_black), TextAlign::CENTER, wx_icon(id(weather_symbol).state));
+      
+      // max temp
+      it.print(margin + icon_margin, weather_row1, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F0E03");
+      it.printf(60, weather_row1, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.1f°", id(weather_max_temp).state);
+      
       // humidity
-      it.print(margin + icon_margin, weather_row1, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F058E");
-      it.printf(60, weather_row1, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f%%", id(weather_humidity).state);
+      it.print(margin + icon_margin, weather_row2, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F058E");
+      it.printf(60, weather_row2, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f%%", id(weather_humidity).state);
 
       // pressure
-      it.print(margin + icon_margin, weather_row2, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F029A");
-      it.printf(60, weather_row2, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f hPa", id(weather_pressure).state);
+      it.print(margin + icon_margin, weather_row3, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F029A");
+      it.printf(60, weather_row3, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f hPa", id(weather_pressure).state);
 
       // wind
-      it.print(margin + icon_margin, weather_row3, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F059D");
+      it.print(margin + icon_margin, weather_row4, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F059D");
       // map the wind bearing (degrees, 0 = N) to an 8-point compass label
       static const char* WIND_DIRS[] = { "N", "NO", "O", "SO", "S", "SW", "W", "NW" };
       const float wind_bearing = id(weather_wind_bearing).state;
       const char* wind_dir = isnan(wind_bearing) ? "?" : WIND_DIRS[((int) roundf(wind_bearing / 45.0f) % 8 + 8) % 8];
-      it.printf(60, weather_row3, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "(%s) %.1f km/h", wind_dir, id(weather_wind_speed).state);
+      it.printf(60, weather_row4, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "(%s) %.1f km/h", wind_dir, id(weather_wind_speed).state);
 
       // =================================================================
       // FORECAST  (4 columns)
       // =================================================================
-      constexpr size_t forecast_start = 230;
+      constexpr size_t forecast_start = 250;
       constexpr size_t fc_day_y = forecast_start + 70;
       constexpr size_t fc_icon_y = forecast_start + 110;
       constexpr size_t fc_temp_y = forecast_start + 160;
@@ -779,10 +788,10 @@ display:
       // -- left: room climate --
       it.print(margin, home_subtitle_y, id(font_md), id(color_black), TextAlign::CENTER_LEFT, id(room_name).state.c_str());
 
-      it.print(margin + icon_margin, home_row1, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F050F");
+      it.print(margin + icon_margin, home_row1, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F050F");
       it.printf(60, home_row1, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.1f°", id(room_temperature).state);
 
-      it.print(margin + icon_margin, home_row2, id(font_icon_md), id(color_black), TextAlign::CENTER, "\U000F058E");
+      it.print(margin + icon_margin, home_row2, id(font_icon_md), id(color_black), TextAlign::CENTER_LEFT, "\U000F058E");
       it.printf(60, home_row2, id(font_xl), id(color_black), TextAlign::CENTER_LEFT, "%.0f%%", id(room_humidity).state);
 
       // -- right: family calendar --
@@ -941,7 +950,7 @@ script:
             - lambda: "id(pwr_sleep).begin_sleep();"
 
   - id: epd_update
-    mode: queued 
+    mode: single
     then:
       # 1) wait until every registered sensor has a state (max 30s).
       #    The WiFi -> API -> HA handshake on a cold boot takes ~17s before any

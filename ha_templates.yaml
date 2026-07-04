@@ -25,9 +25,11 @@
       unique_id: display_data
       state: "{{ now().isoformat() }}"
       attributes:
+        max_today: >
+          {{ weather_data[my_weather].forecast[0].temperature | round(1) }}
         forecast: >
           {% set out = namespace(items=[]) %}
-            {% for f in weather_data[my_weather].forecast[:4] %}
+            {% for f in weather_data[my_weather].forecast[1:5] %}
             {% set wd = (as_datetime(f.datetime) | as_local).isoweekday() %}
               {% set out.items = out.items + [
                 wd ~ '|' ~ f.condition ~ '|' ~ (f.temperature | round(1)) ~ '|' ~ (f.templow | round(1))
