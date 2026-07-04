@@ -1,3 +1,18 @@
+# ---------------------------------------------------------------------------
+# Home Assistant entity ids consumed by this display. Override per install.
+# ---------------------------------------------------------------------------
+substitutions:
+  weather_entity: weather.pirateweather
+  room_temperature_entity: sensor.living_room_og_livingroom_sensor_temperature
+  room_humidity_entity: sensor.living_room_og_livingroom_sensor_humidity
+  grid_import_entity: sensor.grid_energy_imported_today
+  grid_export_entity: sensor.grid_energy_returned_today
+  solar_entity: sensor.solar_energy_generated_today
+  home_power_entity: sensor.home_power
+  home_battery_entity: sensor.home_battery_level
+  display_data_entity: sensor.display_data_packed
+
+
 esphome:
   name: roedalm-epaper-display
   friendly_name: Rödalm ePaper display
@@ -148,62 +163,65 @@ sensor:
   # home assistant sensors
   #   current weather
   - platform: homeassistant
-    entity_id: weather.pirateweather
+    entity_id: ${weather_entity}
     attribute: temperature
     internal: true
     id: weather_temperature
   - platform: homeassistant
+    entity_id: ${display_data_entity}
     attribute: max_today
     internal: true
     id: weather_max_temp
+  - platform: homeassistant
+    entity_id: ${weather_entity}
     attribute: humidity
     internal: true
     id: weather_humidity
   - platform: homeassistant
-    entity_id: weather.pirateweather
+    entity_id: ${weather_entity}
     attribute: pressure
     internal: true
     id: weather_pressure
   - platform: homeassistant
-    entity_id: weather.pirateweather
+    entity_id: ${weather_entity}
     attribute: wind_bearing
     internal: true
     id: weather_wind_bearing
   - platform: homeassistant
-    entity_id: weather.pirateweather
+    entity_id: ${weather_entity}
     attribute: wind_speed
     internal: true
     id: weather_wind_speed
   #   home room data
   - platform: homeassistant
-    entity_id: sensor.living_room_og_livingroom_sensor_temperature
+    entity_id: ${room_temperature_entity}
     internal: true
     id: room_temperature
   - platform: homeassistant
-    entity_id: sensor.living_room_og_livingroom_sensor_humidity
+    entity_id: ${room_humidity_entity}
     internal: true
     id: room_humidity
   #   energy: grid import / export today (kWh, resets at midnight)
   - platform: homeassistant
-    entity_id: sensor.grid_energy_imported_today
+    entity_id: ${grid_import_entity}
     internal: true
     id: grid_import_today
   - platform: homeassistant
-    entity_id: sensor.grid_energy_returned_today
+    entity_id: ${grid_export_entity}
     internal: true
     id: grid_export_today
   #   energy: solar generated today (kWh, resets at midnight)
   - platform: homeassistant
-    entity_id: sensor.solar_energy_generated_today
+    entity_id: ${solar_entity}
     internal: true
     id: solar_today
   #   energy: current home usage (W) and home battery charge (%)
   - platform: homeassistant
-    entity_id: sensor.home_power
+    entity_id: ${home_power_entity}
     internal: true
     id: home_power
   - platform: homeassistant
-    entity_id: sensor.home_battery_level
+    entity_id: ${home_battery_entity}
     internal: true
     id: home_batt_soc
 
@@ -253,7 +271,7 @@ text_sensor:
   # Home Assistant sensors
   #   current weather
   - platform: homeassistant
-    entity_id: weather.pirateweather
+    entity_id: ${weather_entity}
     internal: true
     id: weather_symbol
   #   packed forecast data
@@ -261,7 +279,7 @@ text_sensor:
   - platform: homeassistant
     id: forecast_days
     internal: true
-    entity_id: sensor.display_data_packed
+    entity_id: ${display_data_entity}
     attribute: forecast
   #   home room name
   - platform: template
@@ -273,7 +291,7 @@ text_sensor:
   - platform: homeassistant
     id: event_data
     internal: true
-    entity_id: sensor.display_data_packed
+    entity_id: ${display_data_entity}
     attribute: events
     
 
