@@ -102,11 +102,10 @@ logger:
 api:
   id: ha_api
   encryption:
-    key: "WIseOsO2sE8klgX1i/iGytizq/5gd+ND4BpHuimzmhs="
-
-
+    key: !secret roedalm_epaper_display__encryption_key
 ota:
   - platform: esphome
+    password: !secret roedalm_epaper_display__ota_password
 
 
 wifi:
@@ -119,9 +118,7 @@ wifi:
 
   ap:
     ssid: ePaper Display Fallback Hotspot
-    password: "L1QMifo8rXnT"
-
-
+    password: !secret roedalm_epaper_display__ap_password
 captive_portal:
 
 
