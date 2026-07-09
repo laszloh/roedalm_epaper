@@ -21,8 +21,6 @@ substitutions:
 esphome:
   name: roedalm-epaper-display
   friendly_name: Rödalm ePaper display
-  platformio_options:
-    upload_speed: 921600
   on_boot: 
     priority: -100
     then:
@@ -83,15 +81,15 @@ external_components:
   - source: github://laszloh/esphome@epaper-dke86bf
     components: [epaper_spi]
     refresh: 1s
+  - source: github://laszloh/esphome@sy6974
+    components: [sy6974]
+    refresh: 1s
 
 
 esp32:
-  variant: esp32
+  variant: esp32s3
   framework:
     type: esp-idf
-    advanced:
-      minimum_chip_revision: 3.1
-      sram1_as_iram: True
     sdkconfig_options:
       CONFIG_ESP_TASK_WDT_TIMEOUT_S: "60"
 
@@ -123,6 +121,31 @@ captive_portal:
 
 
 sensor:
+  # board specific sensors
+  - platform: adc
+    pin: GPIO1
+    samples: 8
+    attenuation: 12db
+    id: batt_v_raw
+    internal: true
+    update_interval: never  # script needed
+  - platform: template
+    id: batt_v
+    name: "Battery Voltage"
+    unit_of_measurement: "V"
+    accuracy_decimals: 3
+    lambda: |-
+      id(adc_switch).turn_on();
+      delay(20);
+      float v = id(batt_v_raw).sample();
+      id(adc_switch).turn_off();
+      return v * 1.9857f;
+  - platform: sy6974
+    sy6974_id: pmic
+    charge_current:
+      name: "Charge Current Limit"
+    precharge_current:
+      name: "Precharge Current Limit"
   # board uptime
   - platform: uptime
     name: Uptime
@@ -141,15 +164,6 @@ sensor:
     unit_of_measurement: "%"
     entity_category: "diagnostic"
     device_class: ""
-  - platform: adc
-    pin: GPIO35
-    samples: 8
-    attenuation: 12db
-    id: batt_v
-    name: "Battery voltage"
-    filters:
-#      - multiply: 1.967  # 1:2 voltage divider, adjusted to real R-value
-      - multiply: 2.0
   - platform: copy
     source_id: batt_v
     id: batt_pct
@@ -279,6 +293,15 @@ datetime:
 
 
 text_sensor:
+  # board specific sensors
+  - platform: sy6974
+    sy6974_id: pmic
+    bus_status:
+      name: "Power Source Type"
+    charge_status:
+      name: "Charging Status"
+    ntc_status:
+      name: "NTC Status"
   # ESPHome version string
   - platform: version
     name: ESPHome Version
@@ -326,47 +349,39 @@ text_sensor:
     
 
 binary_sensor:
-  - platform: gpio
-    pin: 
-      number: GPIO32
-      inverted: true
-      mode: 
-        input: true
-        pullup: true
-    id: tp4056_chrg
-    name: "TP4056 Charging"
-    filters:
-      - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
-    on_state:
-      # ignore the initial state published during boot (on_boot drives the
-      # first render); only re-render on real charger changes afterwards
-      - if:
-          condition:
-            lambda: 'return id(boot_done);'
-          then:
-            - script.execute: epd_update
-  - platform: gpio
+  # board specific sensors
+  - platform: sy6974
+    sy6974_id: pmic
+    vbus_connected:
+      name: "VBUS Connected"
+      id: vbus_status
+      on_state:
+        # ignore the initial state published during boot (on_boot drives the
+        # first render); only re-render on real switch changes afterwards
+        - if:
+            condition:
+              lambda: 'return id(boot_done);'
+            then:
+              - script.execute: epd_update
+    charging:
+      name: "Battery Charging"
+      id: chrg_status
+    charge_done:
+      name: "Charge Done"
+      id: stby_status
+  # - platform: gpio
+  #   pin:
+  #     number: GPIO8
+  #     allow_other_uses: true
+  #     inverted: true
+  #     mode:
+  #       input: true
+  #       pullup: true
+  #   internal: true
+  - platform: gpio  
     pin:
-      number: GPIO33
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    id: tp4056_stdby
-    name: "TP4056 Standby"
-    filters:
-      - delayed_on_off: 20ms   # glitch filter: state must be stable for 20ms
-    on_state:
-      # ignore the initial state published during boot (on_boot drives the
-      # first render); only re-render on real charger changes afterwards
-      - if:
-          condition:
-            lambda: 'return id(boot_done);'
-          then:
-            - script.execute: epd_update
-  - platform: gpio
-    pin:
-      number: GPIO23
+      number: GPIO2
+      allow_other_uses: true
       inverted: true
       mode:
         input: true
@@ -383,19 +398,6 @@ binary_sensor:
             lambda: 'return id(boot_done);'
           then:
             - script.execute: epd_update
-  - platform: gpio
-    pin:
-      number: GPIO12
-      inverted: true
-      allow_other_uses: true
-      mode:
-        input: true
-        pullup: true
-    id: wake_any
-    name: "Wake source active"
-    entity_category: diagnostic
-    filters:
-      - delayed_on_off: 20ms
         
 
 button:
@@ -418,11 +420,17 @@ number:
 
 
 switch:
+  # Board gpio pinout
   - platform: gpio
     id: power_switch
     internal: true
-    pin: GPIO04
+    pin: GPIO43
     restore_mode: ALWAYS_ON
+  - platform: gpio
+    id: adc_switch
+    internal: true
+    pin: GPIO6
+    restore_mode: ALWAYS_OFF
   - platform: template
     name: "Force awake"
     id: force_awake
@@ -439,18 +447,38 @@ switch:
             - script.execute: enter_sleep
 
 
+i2c:
+  - id: i2c_pmic
+    scl: GPIO41
+    sda: GPIO42
+    scan: true
+    frequency: 10kHz
+    sda_pullup_enabled: False
+    scl_pullup_enabled: False
+
+
+sy6974:
+  id: pmic
+  i2c_id: i2c_pmic
+  address: 0x6B
+  enable_status_led: true
+  input_current_limit: 1000
+  charge_voltage: 4208
+  charge_current: 2040
+  precharge_current: 180
+  jeita_vset_enabled: false
+  charge_enabled: true
+  watchdog_timeout: never
+
+
 deep_sleep:
   id: pwr_sleep
-  wakeup_pin: 
-    number: GPIO12
-    allow_other_uses: true
-    mode: INPUT_PULLUP
-  wakeup_pin_mode: INVERT_WAKEUP
-
-  
-status_led:
-  pin: GPIO2
-  
+  esp32_ext1_wakeup:
+    pins:
+      - number: GPIO8
+      - number: GPIO2
+        allow_other_uses: true
+    mode: ANY_LOW
 
 time:
   - platform: homeassistant
@@ -554,7 +582,7 @@ font:
       - "\U000F05A9"   # wifi                      (API connected)
       - "\U000F05AA"   # wifi-off                  (API disconnected)
       - "\U000F125E"   # battery-unknown
-      - "\U000F1211"   # battery-charging-100      (on charger, full)
+      - "\U000F1C3B"   # battery-charging-100      (on charger, full)
       - "\U000F12A6"   # battery charging high
       - "\U000F12A5"   # battery charging medium
       - "\U000F12A4"   # battery charging low/critical
@@ -599,21 +627,20 @@ color:
 # ---------------------------------------------------------------------------
 spi:
   id: spi_bus0
-  clk_pin: GPIO13
-  mosi_pin: GPIO14
+  clk_pin: GPIO7
+  mosi_pin: GPIO9
 
 
 display:
   - platform: epaper_spi
     id: epd_display
     cs_pin:
-      number: GPIO15
-      ignore_strapping_warning: true   # GPIO15 is a strapping pin on ESP32
-    dc_pin: GPIO27
+      number: GPIO44
+    dc_pin: GPIO10
     busy_pin:
-      number: GPIO25
+      number: GPIO4
       inverted: true
-    reset_pin: GPIO26
+    reset_pin: GPIO38
     reset_duration: 20ms        # helps newer (Rev 2.x) 7.5 BWR driver HATs latch
     model: dke-7.5in-86bf-bwr
     spi_id: spi_bus0
@@ -633,7 +660,7 @@ display:
           constexpr size_t height = 800;
 
           const float bat      = id(batt_pct).state;
-          const bool  on_batt  = !id(tp4056_chrg).state && !id(tp4056_stdby).state;
+          const bool  on_batt  = !id(chrg_status).state && !id(stby_status).state;
           const bool  bat_crit = !isnan(bat) && bat <= ${battery_critical_pct} && on_batt;
 
           const char *glyph = bat_crit ? "\U000F125D" : "\U000F05AA"; // battery-off-outline / wifi-off
@@ -690,7 +717,7 @@ display:
           const auto draw_chrome = [&]() {
             // top status row + footer
             constexpr size_t status_icon_y = 25;
-            constexpr size_t status_text_y = status_icon_y + 2;          // text nudged +2 to sit on icon centre
+            constexpr size_t status_text_y = status_icon_y + 1;
             constexpr size_t footer_line_y = 770;
             constexpr size_t footer_text_y = 795;
             constexpr size_t icon_text_offset = 30;
@@ -712,15 +739,15 @@ display:
             if (!isnan(bat)) {
               if (bat > 100.0) bat = 100.0;                 // clamp for display
 
-              const bool charging = id(tp4056_chrg).state;  // CHRG active -> charging
-              const bool full     = id(tp4056_stdby).state; // STDBY active -> charge complete
+              const bool charging = id(chrg_status).state;  // CHRG active -> charging
+              const bool full     = id(stby_status).state; // STDBY active -> charge complete
               if (charging) {
                 // charging glyphs come in 3 levels; critical falls back to "low charging"
                 if      (bat > 76.0) bat_icon = "\U000F12A6"; // full charging
                 else if (bat > 51.0) bat_icon = "\U000F12A5"; // medium charging
                 else                 bat_icon = "\U000F12A4"; // low / critical charging
               } else if (full) {
-                bat_icon = "\U000F1211";                       // on charger, complete -> full
+                bat_icon = "\U000F1C3B";                       // on charger, complete -> full
               } else {
                 // on battery / discharging
                 if      (bat > 76.0) bat_icon = "\U000F12A3"; // full
@@ -991,7 +1018,7 @@ script:
             # suspended while forced awake (software) OR any hardware wake
             # source is active (charger CHRG/STDBY or physical switch,
             # diode-ORed onto GPIO12)
-            lambda: 'return id(force_awake).state || id(wake_any).state;'
+            lambda: 'return id(force_awake).state || id(phy_force_awake).state || id(vbus_status).state;'
           then:
             # SUSPENDED -> stay awake, wait for the next boundary, then re-render
             - delay: !lambda |-
@@ -1073,7 +1100,7 @@ script:
           condition:
             lambda: |-
               const float bat     = id(batt_pct).state;
-              const bool  on_batt = !id(tp4056_chrg).state && !id(tp4056_stdby).state;
+              const bool  on_batt = !id(chrg_status).state && !id(stby_status).state;
               return !isnan(bat) && bat <= ${battery_critical_pct} && on_batt;
           then:
             - display.page.show: error_page
